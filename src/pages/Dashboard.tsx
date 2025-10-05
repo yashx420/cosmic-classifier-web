@@ -5,6 +5,7 @@ import { Home } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import DataExplorer from '@/components/DataExplorer';
 import PredictForm from '@/components/PredictForm';
+import LightCurvePredictor from '@/components/LightCurvePredictor';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -33,9 +34,10 @@ const Dashboard = () => {
 
         {/* Main Content */}
         <Tabs defaultValue="explorer" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2 mb-8">
+          <TabsList className="grid w-full max-w-2xl grid-cols-3 mb-8">
             <TabsTrigger value="explorer">Data Explorer</TabsTrigger>
-            <TabsTrigger value="classifier">AI Classifier</TabsTrigger>
+            <TabsTrigger value="classifier">Parameter Classifier</TabsTrigger>
+            <TabsTrigger value="lightcurve">Light Curve Classifier</TabsTrigger>
           </TabsList>
 
           <TabsContent value="explorer">
@@ -44,6 +46,10 @@ const Dashboard = () => {
 
           <TabsContent value="classifier">
             <PredictForm />
+          </TabsContent>
+
+          <TabsContent value="lightcurve">
+            <LightCurvePredictor />
           </TabsContent>
         </Tabs>
       </div>
