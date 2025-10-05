@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import Papa from 'papaparse';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
@@ -9,17 +10,89 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Badge } from '@/components/ui/badge';
 import { Database, Filter, Info } from 'lucide-react';
 
-// Sample exoplanet data
-const sampleData = [
-  { id: 1, name: 'Kepler-442b', dataset: 'Kepler', radius: 1.34, period: 112.3, temp: 233, disposition: 'CONFIRMED' },
-  { id: 2, name: 'K2-18b', dataset: 'K2', radius: 2.24, period: 32.9, temp: 284, disposition: 'CONFIRMED' },
-  { id: 3, name: 'TOI-700d', dataset: 'TESS', radius: 1.19, period: 37.4, temp: 269, disposition: 'CONFIRMED' },
-  { id: 4, name: 'Kepler-186f', dataset: 'Kepler', radius: 1.17, period: 129.9, temp: 188, disposition: 'CONFIRMED' },
-  { id: 5, name: 'K2-72e', dataset: 'K2', radius: 0.86, period: 24.2, temp: 290, disposition: 'CANDIDATE' },
-  { id: 6, name: 'TOI-1452b', dataset: 'TESS', radius: 1.67, period: 11.1, temp: 326, disposition: 'CANDIDATE' },
-  { id: 7, name: 'Kepler-62f', dataset: 'Kepler', radius: 1.41, period: 267.3, temp: 208, disposition: 'CONFIRMED' },
-  { id: 8, name: 'K2-155d', dataset: 'K2', radius: 1.64, period: 40.7, temp: 257, disposition: 'CONFIRMED' },
-];
+type Planet = {
+  id: number;
+  name: string;
+  dataset: 'Kepler' | 'K2' | 'TESS';
+  radius: number;
+  period: number;
+  temp: number;        // unified from eq_temp / pl_eqt / koi_teq
+  disposition: string; // CONFIRMED / CANDIDATE / FALSE POSITIVE
+  raw?: Record<string, any>;
+};
+
+const DATASETS = [
+  { key: 'Kepler', path: '/data/kepler.csv' },
+  { key: 'K2', path: '/data/k2.csv' },
+  { key: 'TESS', path: '/data/tess.csv' },
+] as const;
+
+const dispositionNormalize = (val: any) => {
+  if (!val) return 'CANDIDATE';
+  const s = String(val).toUpperCase();
+  if (['CONFIRMED', 'C'].includes(s)) return 'CONFIRMED';
+  if (['FALSE POSITIVE', 'FP'].includes(s)) return 'FALSE POSITIVE';
+  return 'CANDIDATE';
+};
+
+function standardizeRow(row: any, dataset: string): Planet | null {
+  // Extract & normalize columns per dataset
+  try {
+    let period: number | undefined;
+    let radius: number | undefined;
+    let eq_temp: number | undefined;
+    let disposition: string | undefined;
+    let name: string | undefined;
+
+    if (dataset === 'Kepler') {
+      period = parseFloat(row['koi_period']);
+      radius = parseFloat(row['koi_prad']);
+      eq_temp = parseFloat(row['koi_teq']);
+      disposition = row['koi_disposition'];
+      // Prioritize confirmed Kepler planet name, then KOI ID
+      name = row['kepler_name'] || row['kepoi_name'] || `KepID-${row['kepid']}`;
+    } else if (dataset === 'K2') {
+      period = parseFloat(row['pl_orbper']);
+      radius = parseFloat(row['pl_rade']);
+      eq_temp = parseFloat(row['pl_eqt']);
+      disposition = row['disposition'] || row['k2_disposition'];
+      // For K2, use planet name as is (often includes EPIC prefix)
+      name = row['pl_name'] || row['hostname'] || 'K2-Object';
+    } else if (dataset === 'TESS') {
+      period = parseFloat(row['pl_orbper']);
+      radius = parseFloat(row['pl_rade']);
+      eq_temp = parseFloat(row['pl_eqt']);
+      disposition = row['tfopwg_disp'] || row['disposition'];
+      // Prioritize TOI ID, then TIC ID, then planet name
+      name = (row['toi'] ? `TOI-${row['toi']}` : null) || 
+             (row['tid'] ? `TIC-${row['tid']}` : null) || 
+             row['pl_name'] || 
+             row['hostname'] || 
+             'TESS-Object';
+    }
+
+    if (
+      period === undefined || isNaN(period) ||
+      radius === undefined || isNaN(radius) ||
+      eq_temp === undefined || isNaN(eq_temp)
+    ) {
+      return null;
+    }
+
+    return {
+      id: 0, // temporary, will assign later
+      name: name || `${dataset}-Object`,
+      dataset: dataset as Planet['dataset'],
+      radius,
+      period,
+      temp: eq_temp,
+      disposition: dispositionNormalize(disposition),
+      raw: row
+    };
+  } catch {
+    return null;
+  }
+}
 
 const DataExplorer = () => {
   const [dataset, setDataset] = useState<string>('all');
@@ -29,11 +102,70 @@ const DataExplorer = () => {
   const [maxPeriod, setMaxPeriod] = useState<string>('');
   const [minTemp, setMinTemp] = useState<string>('');
   const [maxTemp, setMaxTemp] = useState<string>('');
-  const [selectedPlanet, setSelectedPlanet] = useState<typeof sampleData[0] | null>(null);
-  const [filteredData, setFilteredData] = useState(sampleData);
+
+  const [allData, setAllData] = useState<Planet[]>([]);
+  const [filteredData, setFilteredData] = useState<Planet[]>([]);
+  const [selectedPlanet, setSelectedPlanet] = useState<Planet | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch & build unified dataset
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+      const collected: Planet[] = [];
+      for (const entry of DATASETS) {
+        try {
+          const res = await fetch(entry.path);
+          if (!res.ok) throw new Error(`${entry.path} ${res.status}`);
+          const csvText = await res.text();
+
+          // Remove NASA comment lines (starting with #)
+          const cleanedText = csvText
+            .split('\n')
+            .filter(line => !line.trim().startsWith('#'))
+            .join('\n');
+
+          // Parse
+          const parsed = Papa.parse(cleanedText, {
+            header: true,
+            dynamicTyping: false,
+            skipEmptyLines: true,
+          });
+
+          if (parsed.errors.length) {
+            console.warn(`Parse warnings for ${entry.path}`, parsed.errors.slice(0, 3));
+          }
+
+          (parsed.data as any[]).forEach((row) => {
+            const p = standardizeRow(row, entry.key);
+            if (p) collected.push(p);
+          });
+        } catch (e: any) {
+          console.error(e);
+          setError(prev => prev ? prev + ` | ${e.message}` : e.message);
+        }
+      }
+
+      // Assign stable IDs
+      collected.forEach((p, idx) => (p.id = idx + 1));
+
+      if (!cancelled) {
+        setAllData(collected);
+        setFilteredData(collected);
+        setLoading(false);
+      }
+    }
+
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const applyFilters = () => {
-    let filtered = sampleData;
+    let filtered = allData;
 
     if (dataset !== 'all') {
       filtered = filtered.filter(p => p.dataset === dataset);
@@ -71,7 +203,7 @@ const DataExplorer = () => {
     setMaxPeriod('');
     setMinTemp('');
     setMaxTemp('');
-    setFilteredData(sampleData);
+    setFilteredData(allData);
   };
 
   return (
@@ -85,7 +217,7 @@ const DataExplorer = () => {
               Filters
             </CardTitle>
             <CardDescription>
-              Refine your search by dataset and exoplanet characteristics
+              Refine your search across Kepler, K2, and TESS standardized catalogs
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -187,9 +319,11 @@ const DataExplorer = () => {
         {/* Results Card */}
         <Card className="glow-border">
           <CardHeader>
-            <CardTitle>Results ({filteredData.length} planets)</CardTitle>
+            <CardTitle>
+              Results {loading ? '(Loading...)' : `(${filteredData.length} planets)`}
+            </CardTitle>
             <CardDescription>
-              Click on a planet to view detailed information
+              {error ? <span className="text-destructive">Data load issue: {error}</span> : 'Click info to view details'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -197,7 +331,7 @@ const DataExplorer = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
+                    <TableHead>Planet ID</TableHead>
                     <TableHead>Dataset</TableHead>
                     <TableHead>Radius (R⊕)</TableHead>
                     <TableHead>Period (days)</TableHead>
@@ -207,32 +341,36 @@ const DataExplorer = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredData.length === 0 ? (
+                  {loading ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                        Loading catalogs...
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredData.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         No planets match your filters
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredData.map((planet) => (
-                      <TableRow key={planet.id} className="cursor-pointer hover:bg-muted/50">
-                        <TableCell className="font-medium">{planet.name}</TableCell>
+                    filteredData.slice(0, 500).map(p => ( // slice to avoid huge DOM
+                      <TableRow key={p.id} className="hover:bg-muted/50">
+                        <TableCell className="font-medium">{p.name}</TableCell>
+                        <TableCell><Badge variant="outline">{p.dataset}</Badge></TableCell>
+                        <TableCell>{p.radius.toFixed(2)}</TableCell>
+                        <TableCell>{p.period.toFixed(2)}</TableCell>
+                        <TableCell>{Math.round(p.temp)}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{planet.dataset}</Badge>
-                        </TableCell>
-                        <TableCell>{planet.radius.toFixed(2)}</TableCell>
-                        <TableCell>{planet.period.toFixed(1)}</TableCell>
-                        <TableCell>{planet.temp}</TableCell>
-                        <TableCell>
-                          <Badge variant={planet.disposition === 'CONFIRMED' ? 'default' : 'secondary'}>
-                            {planet.disposition}
+                          <Badge variant={p.disposition === 'CONFIRMED' ? 'default' : (p.disposition === 'FALSE POSITIVE' ? 'destructive' : 'secondary')}>
+                            {p.disposition}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => setSelectedPlanet(planet)}
+                            onClick={() => setSelectedPlanet(p)}
                           >
                             <Info className="h-4 w-4" />
                           </Button>
@@ -242,6 +380,11 @@ const DataExplorer = () => {
                   )}
                 </TableBody>
               </Table>
+              {!loading && filteredData.length > 500 && (
+                <p className="text-xs text-muted-foreground px-4 py-2">
+                  Showing first 500 rows (apply more filters to narrow results)
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -249,40 +392,38 @@ const DataExplorer = () => {
 
       {/* Planet Details Dialog */}
       <Dialog open={!!selectedPlanet} onOpenChange={() => setSelectedPlanet(null)}>
-        <DialogContent className="glow-border">
+        <DialogContent className="glow-border max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-2xl">{selectedPlanet?.name}</DialogTitle>
-            <DialogDescription>Detailed exoplanet information</DialogDescription>
+            <DialogDescription>Standardized catalog entry</DialogDescription>
           </DialogHeader>
           {selectedPlanet && (
-            <div className="space-y-4">
+            <div className="space-y-4 text-sm">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-sm text-muted-foreground">Dataset</p>
+                  <p className="text-muted-foreground">Dataset</p>
                   <p className="font-medium">{selectedPlanet.dataset}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  <Badge variant={selectedPlanet.disposition === 'CONFIRMED' ? 'default' : 'secondary'}>
-                    {selectedPlanet.disposition}
-                  </Badge>
+                  <p className="text-muted-foreground">Disposition</p>
+                  <p className="font-medium">{selectedPlanet.disposition}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Radius</p>
-                  <p className="font-medium">{selectedPlanet.radius.toFixed(2)} R⊕</p>
+                  <p className="text-muted-foreground">Radius (R⊕)</p>
+                  <p className="font-medium">{selectedPlanet.radius.toFixed(2)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Orbital Period</p>
-                  <p className="font-medium">{selectedPlanet.period.toFixed(1)} days</p>
+                  <p className="text-muted-foreground">Period (days)</p>
+                  <p className="font-medium">{selectedPlanet.period.toFixed(2)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Temperature</p>
-                  <p className="font-medium">{selectedPlanet.temp} K</p>
+                  <p className="text-muted-foreground">Equilibrium Temp (K)</p>
+                  <p className="font-medium">{Math.round(selectedPlanet.temp)}</p>
                 </div>
               </div>
-              <div className="pt-4 border-t">
-                <p className="text-sm text-muted-foreground">
-                  This exoplanet was discovered by the {selectedPlanet.dataset} mission using the transit method.
+              <div className="pt-3 border-t">
+                <p className="text-muted-foreground">
+                  Raw standardized fields are available in memory (see developer tools). This entry was created by client-side normalization.
                 </p>
               </div>
             </div>
