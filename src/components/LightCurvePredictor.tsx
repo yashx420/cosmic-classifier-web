@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Upload, Sparkles, LineChart } from 'lucide-react';
+import { Upload, Sparkles, FileUp } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -17,13 +17,14 @@ interface PredictionResult {
   flux_points: number;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/predict-lightcurve';
+const API_URL = 'http://localhost:3001/api/predict';
 
 const LightCurvePredictor = () => {
   const [fluxData, setFluxData] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'upload' | 'manual'>('upload');
   const { toast } = useToast();
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -119,106 +120,123 @@ const LightCurvePredictor = () => {
   };
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      {/* Manual Input */}
+    <div className="space-y-6">
+      {/* Header */}
       <Card className="glow-border bg-card/50 backdrop-blur-sm">
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <LineChart className="h-5 w-5 text-primary" />
-            <CardTitle>Manual Flux Input</CardTitle>
-          </div>
+          <CardTitle className="text-2xl glow-text">Exoplanet Classifier</CardTitle>
           <CardDescription>
-            Enter flux values from light curve data (comma or space separated)
+            Analyze light curve data to identify exoplanet candidates
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleManualSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="fluxData">Flux Values</Label>
-              <Textarea
-                id="fluxData"
-                placeholder="Example: 1.0002, 0.9998, 1.0001, 0.9999, 1.0000..."
-                value={fluxData}
-                onChange={(e) => setFluxData(e.target.value)}
-                className="min-h-[200px] font-mono text-sm"
-              />
-              <p className="text-xs text-muted-foreground">
-                Enter normalized flux values separated by commas or spaces
-              </p>
-            </div>
-            <Button 
-              type="submit" 
-              disabled={loading}
-              className="w-full"
-            >
-              {loading ? (
-                <>Processing...</>
-              ) : (
-                <>
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Predict Exoplanet
-                </>
-              )}
-            </Button>
-          </form>
-        </CardContent>
       </Card>
 
-      {/* CSV Upload */}
+      {/* Tabs */}
+      <div className="flex gap-2 p-1 bg-secondary/50 rounded-lg backdrop-blur-sm border border-border">
+        <button
+          onClick={() => setActiveTab('upload')}
+          className={`flex-1 px-4 py-2 rounded-md font-medium transition-all ${
+            activeTab === 'upload'
+              ? 'bg-primary text-primary-foreground shadow-lg'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+          }`}
+        >
+          <FileUp className="inline-block mr-2 h-4 w-4" />
+          Upload CSV
+        </button>
+        <button
+          onClick={() => setActiveTab('manual')}
+          className={`flex-1 px-4 py-2 rounded-md font-medium transition-all ${
+            activeTab === 'manual'
+              ? 'bg-primary text-primary-foreground shadow-lg'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+          }`}
+        >
+          <Sparkles className="inline-block mr-2 h-4 w-4" />
+          Manual Entry
+        </button>
+      </div>
+
+      {/* Content Area */}
       <Card className="glow-border bg-card/50 backdrop-blur-sm">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Upload className="h-5 w-5 text-primary" />
-            <CardTitle>Upload CSV File</CardTitle>
-          </div>
-          <CardDescription>
-            Upload a CSV file containing flux values (one column)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleFileSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="csvFile">CSV File</Label>
-              <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary transition-colors">
-                <Input
-                  id="csvFile"
-                  type="file"
-                  accept=".csv"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                  className="hidden"
-                />
-                <label htmlFor="csvFile" className="cursor-pointer">
-                  <Upload className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-sm font-medium">
-                    {file ? file.name : 'Click to upload CSV file'}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    CSV should contain flux values in a single column
-                  </p>
-                </label>
+        <CardContent className="pt-6">
+          {activeTab === 'upload' ? (
+            <form onSubmit={handleFileSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="csvFile" className="text-base font-semibold">CSV File Upload</Label>
+                <div className="border-2 border-dashed border-border rounded-lg p-12 text-center hover:border-primary transition-colors cursor-pointer">
+                  <Input
+                    id="csvFile"
+                    type="file"
+                    accept=".csv"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                  <label htmlFor="csvFile" className="cursor-pointer">
+                    <Upload className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-lg font-medium mb-2">
+                      {file ? file.name : 'Click to upload CSV file'}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      CSV should contain flux values in a single column
+                    </p>
+                  </label>
+                </div>
               </div>
-            </div>
-            <Button 
-              type="submit" 
-              disabled={loading || !file}
-              className="w-full"
-            >
-              {loading ? (
-                <>Processing...</>
-              ) : (
-                <>
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload & Predict
-                </>
-              )}
-            </Button>
-          </form>
+              <Button 
+                type="submit" 
+                disabled={loading || !file}
+                className="w-full h-12 text-base"
+                size="lg"
+              >
+                {loading ? (
+                  <>Processing...</>
+                ) : (
+                  <>
+                    <Upload className="mr-2 h-5 w-5" />
+                    Upload & Predict
+                  </>
+                )}
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={handleManualSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <Label htmlFor="fluxData" className="text-base font-semibold">Flux Values</Label>
+                <Textarea
+                  id="fluxData"
+                  placeholder="Example: 1.0002, 0.9998, 1.0001, 0.9999, 1.0000, 1.0003, 0.9997..."
+                  value={fluxData}
+                  onChange={(e) => setFluxData(e.target.value)}
+                  className="min-h-[250px] font-mono text-sm"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Enter normalized flux values separated by commas or spaces
+                </p>
+              </div>
+              <Button 
+                type="submit" 
+                disabled={loading}
+                className="w-full h-12 text-base"
+                size="lg"
+              >
+                {loading ? (
+                  <>Processing...</>
+                ) : (
+                  <>
+                    <Sparkles className="mr-2 h-5 w-5" />
+                    Predict Exoplanet
+                  </>
+                )}
+              </Button>
+            </form>
+          )}
         </CardContent>
       </Card>
 
       {/* Results */}
       {result && (
-        <Card className="md:col-span-2 glow-border bg-card/50 backdrop-blur-sm">
+        <Card className="glow-border bg-card/50 backdrop-blur-sm">
           <CardHeader>
             <CardTitle>Prediction Results</CardTitle>
             <CardDescription>
@@ -226,11 +244,11 @@ const LightCurvePredictor = () => {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div className="grid md:grid-cols-3 gap-4">
-                <div className="p-4 rounded-lg bg-background/50 border border-border">
-                  <p className="text-sm text-muted-foreground mb-1">Classification</p>
-                  <p className={`text-2xl font-bold ${
+                <div className="p-6 rounded-lg bg-background/50 border border-border">
+                  <p className="text-sm text-muted-foreground mb-2">Classification</p>
+                  <p className={`text-3xl font-bold ${
                     result.prediction === 'PLANET DETECTED' 
                       ? 'text-green-500' 
                       : 'text-red-500'
@@ -238,50 +256,50 @@ const LightCurvePredictor = () => {
                     {result.prediction}
                   </p>
                 </div>
-                <div className="p-4 rounded-lg bg-background/50 border border-border">
-                  <p className="text-sm text-muted-foreground mb-1">Planet Probability</p>
-                  <p className="text-2xl font-bold text-primary">
+                <div className="p-6 rounded-lg bg-background/50 border border-border">
+                  <p className="text-sm text-muted-foreground mb-2">Planet Probability</p>
+                  <p className="text-3xl font-bold text-primary">
                     {(result.probability.planet * 100).toFixed(2)}%
                   </p>
                 </div>
-                <div className="p-4 rounded-lg bg-background/50 border border-border">
-                  <p className="text-sm text-muted-foreground mb-1">Flux Data Points</p>
-                  <p className="text-2xl font-bold">
+                <div className="p-6 rounded-lg bg-background/50 border border-border">
+                  <p className="text-sm text-muted-foreground mb-2">Flux Data Points</p>
+                  <p className="text-3xl font-bold">
                     {result.flux_points}
                   </p>
                 </div>
               </div>
 
-              <div className="rounded-lg bg-background/50 border border-border p-4">
-                <h4 className="font-semibold mb-3">Detailed Probabilities</h4>
+              <div className="rounded-lg bg-background/50 border border-border p-6">
+                <h4 className="font-semibold text-lg mb-4">Detailed Probabilities</h4>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Probability</TableHead>
-                      <TableHead>Confidence</TableHead>
+                      <TableHead className="text-base">Category</TableHead>
+                      <TableHead className="text-base">Probability</TableHead>
+                      <TableHead className="text-base">Confidence</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     <TableRow>
-                      <TableCell className="font-medium">No Planet</TableCell>
-                      <TableCell>{(result.probability.no_planet * 100).toFixed(4)}%</TableCell>
+                      <TableCell className="font-medium text-base">No Planet</TableCell>
+                      <TableCell className="text-base">{(result.probability.no_planet * 100).toFixed(4)}%</TableCell>
                       <TableCell>
-                        <div className="w-full bg-secondary rounded-full h-2">
+                        <div className="w-full bg-secondary rounded-full h-3">
                           <div 
-                            className="bg-red-500 h-2 rounded-full transition-all"
+                            className="bg-red-500 h-3 rounded-full transition-all"
                             style={{ width: `${result.probability.no_planet * 100}%` }}
                           />
                         </div>
                       </TableCell>
                     </TableRow>
                     <TableRow>
-                      <TableCell className="font-medium">Planet Detected</TableCell>
-                      <TableCell>{(result.probability.planet * 100).toFixed(4)}%</TableCell>
+                      <TableCell className="font-medium text-base">Planet Detected</TableCell>
+                      <TableCell className="text-base">{(result.probability.planet * 100).toFixed(4)}%</TableCell>
                       <TableCell>
-                        <div className="w-full bg-secondary rounded-full h-2">
+                        <div className="w-full bg-secondary rounded-full h-3">
                           <div 
-                            className="bg-green-500 h-2 rounded-full transition-all"
+                            className="bg-green-500 h-3 rounded-full transition-all"
                             style={{ width: `${result.probability.planet * 100}%` }}
                           />
                         </div>
@@ -294,6 +312,11 @@ const LightCurvePredictor = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* Footer */}
+      <div className="text-center text-sm text-muted-foreground py-4">
+        <p>Powered by Neural Network Model trained on Kepler Space Telescope data</p>
+      </div>
     </div>
   );
 };
